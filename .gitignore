@@ -1,0 +1,12 @@
+# Build artifacts
+*.zip
+
+# Data files (never commit real site data)
+*.csv
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
