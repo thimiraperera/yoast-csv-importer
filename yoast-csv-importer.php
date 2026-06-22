@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Yoast SEO CSV Importer
- * Description: Bulk-set Yoast SEO meta (title, meta description, focus keyphrase, canonical, cornerstone, social, breadcrumb, schema type, excerpt) for pages and posts from a CSV, matched by URL. Adds its own admin menu with a CSV Importer, an SEO status dashboard (completed vs not completed), and a Featured Images page that sets the post thumbnail plus Yoast social and X images at once.
- * Version: 2.2.0
+ * Description: Bulk-set Yoast SEO meta (title, meta description, focus keyphrase, canonical, cornerstone, social, breadcrumb, schema type, excerpt) for pages and posts from a CSV, matched by URL. Adds its own admin menu with a CSV Importer, an SEO status dashboard (completed vs not completed), and a Featured Images page that sets the post thumbnail plus Yoast social and X images at once - one at a time or in bulk to many selected items.
+ * Version: 2.3.0
  * Author: Thimira Perera
  * Requires at least: 5.5
  * Requires Plugins: wordpress-seo
@@ -386,7 +386,19 @@ function yscsv_featured_cell( $post_id ) {
 	return ob_get_clean();
 }
 
-/** AJAX: apply a chosen image to thumbnail + Yoast social (OG) + X/Twitter image. */
+/** Apply one image to a post in all 3 featured-image places. */
+function yscsv_apply_featured_image( $post_id, $att_id, $url ) {
+	// 1) Website page/post featured image (the WordPress post thumbnail).
+	set_post_thumbnail( $post_id, $att_id );
+	// 2) Social media featured image (Yoast Open Graph - Facebook/LinkedIn).
+	update_post_meta( $post_id, '_yoast_wpseo_opengraph-image', $url );
+	update_post_meta( $post_id, '_yoast_wpseo_opengraph-image-id', $att_id );
+	// 3) X (Twitter) featured image.
+	update_post_meta( $post_id, '_yoast_wpseo_twitter-image', $url );
+	update_post_meta( $post_id, '_yoast_wpseo_twitter-image-id', $att_id );
+}
+
+/** AJAX: set the featured image for ONE post. */
 function yscsv_ajax_set_featured() {
 	if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'No permission.' ); }
 	check_ajax_referer( 'yscsv_featured', 'nonce' );
@@ -398,14 +410,7 @@ function yscsv_ajax_set_featured() {
 	$url = wp_get_attachment_url( $att_id );
 	if ( ! $url ) { wp_send_json_error( 'Image not found.' ); }
 
-	// 1) Website page/post featured image (the WordPress post thumbnail).
-	set_post_thumbnail( $post_id, $att_id );
-	// 2) Social media featured image (Yoast Open Graph - Facebook/LinkedIn).
-	update_post_meta( $post_id, '_yoast_wpseo_opengraph-image', $url );
-	update_post_meta( $post_id, '_yoast_wpseo_opengraph-image-id', $att_id );
-	// 3) X (Twitter) featured image.
-	update_post_meta( $post_id, '_yoast_wpseo_twitter-image', $url );
-	update_post_meta( $post_id, '_yoast_wpseo_twitter-image-id', $att_id );
+	yscsv_apply_featured_image( $post_id, $att_id, $url );
 
 	wp_send_json_success( array(
 		'thumb' => wp_get_attachment_image_url( $att_id, 'thumbnail' ),
@@ -413,6 +418,33 @@ function yscsv_ajax_set_featured() {
 	) );
 }
 add_action( 'wp_ajax_yscsv_set_featured', 'yscsv_ajax_set_featured' );
+
+/** AJAX: set the SAME featured image for MANY posts at once. */
+function yscsv_ajax_set_featured_bulk() {
+	if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'No permission.' ); }
+	check_ajax_referer( 'yscsv_featured', 'nonce' );
+
+	$att_id = isset( $_POST['att_id'] ) ? (int) $_POST['att_id'] : 0;
+	$ids    = ( isset( $_POST['post_ids'] ) && is_array( $_POST['post_ids'] ) ) ? array_map( 'intval', $_POST['post_ids'] ) : array();
+	$ids    = array_values( array_filter( array_unique( $ids ) ) );
+	if ( ! $att_id || ! $ids ) { wp_send_json_error( 'Select at least one item and an image.' ); }
+
+	$url = wp_get_attachment_url( $att_id );
+	if ( ! $url ) { wp_send_json_error( 'Image not found.' ); }
+
+	$done = array();
+	foreach ( $ids as $pid ) {
+		yscsv_apply_featured_image( $pid, $att_id, $url );
+		$done[] = $pid;
+	}
+
+	wp_send_json_success( array(
+		'ids'   => $done,
+		'thumb' => wp_get_attachment_image_url( $att_id, 'thumbnail' ),
+		'url'   => $url,
+	) );
+}
+add_action( 'wp_ajax_yscsv_set_featured_bulk', 'yscsv_ajax_set_featured_bulk' );
 
 /** The SEO Status admin page. */
 function yscsv_status_page() {
@@ -512,6 +544,14 @@ function yscsv_featured_page() {
 		<p>Pick an <strong>already-uploaded</strong> image from the WordPress media library for any page or post.
 		   One click sets it in all three places at once: the <strong>page/post featured image</strong>,
 		   the <strong>social (Facebook/LinkedIn) image</strong>, and the <strong>X (Twitter) image</strong>.</p>
+		<p><strong>Set many at once:</strong> tick the boxes for the items you want, then click
+		   &ldquo;Set featured image for selected&rdquo; and choose one image &ndash; it is applied to every ticked item.</p>
+
+		<p style="position:sticky;top:32px;z-index:10;background:#f0f0f1;padding:10px 0;">
+			<button type="button" class="button button-primary yscsv-bulk-set" disabled>
+				Set featured image for selected (<span class="yscsv-count">0</span>)
+			</button>
+		</p>
 
 		<?php
 		$types = yscsv_audited_post_types();
@@ -530,10 +570,15 @@ function yscsv_featured_page() {
 			?>
 			<h2 style="margin-top:24px;"><?php echo esc_html( $pt->labels->name ); ?> &mdash; <?php echo count( $q->posts ); ?></h2>
 			<table class="widefat striped">
-				<thead><tr><th>Title</th><th style="width:220px;">Featured image</th></tr></thead>
+				<thead><tr>
+					<td class="check-column"><input type="checkbox" class="yscsv-check-all" title="Select all"></td>
+					<th>Title</th>
+					<th style="width:220px;">Featured image</th>
+				</tr></thead>
 				<tbody>
 				<?php foreach ( $q->posts as $p ) : ?>
 					<tr>
+						<th scope="row" class="check-column"><input type="checkbox" class="yscsv-check" value="<?php echo (int) $p->ID; ?>"></th>
 						<td>
 							<strong><a href="<?php echo esc_url( get_edit_post_link( $p->ID ) ); ?>"><?php echo esc_html( get_the_title( $p ) ?: '(no title)' ); ?></a></strong>
 						</td>
@@ -551,32 +596,63 @@ function yscsv_featured_page() {
 	<script>
 	jQuery(function($){
 		var nonce = <?php echo wp_json_encode( wp_create_nonce( 'yscsv_featured' ) ); ?>;
+
+		// Paint a row's featured-image cell with the chosen thumbnail.
+		function paintRow(postId, src){
+			var btn = $('.yscsv-set-featured[data-post="'+postId+'"]');
+			var cell = btn.closest('td');
+			cell.find('img.yscsv-thumb').remove();
+			btn.before('<img class="yscsv-thumb" src="'+src+'" style="max-width:60px;height:auto;display:block;margin-bottom:4px;">');
+			btn.text('Change featured image');
+		}
+
+		// ---- Single row ----
 		$('.yscsv-set-featured').on('click', function(e){
 			e.preventDefault();
 			var btn = $(this), postId = btn.data('post');
-			var frame = wp.media({
-				title: 'Select a featured image',
-				button: { text: 'Use this image' },
-				library: { type: 'image' },
-				multiple: false
-			});
+			var frame = wp.media({ title:'Select a featured image', button:{text:'Use this image'}, library:{type:'image'}, multiple:false });
 			frame.on('select', function(){
 				var att = frame.state().get('selection').first().toJSON();
 				btn.prop('disabled', true).text('Saving...');
-				$.post(ajaxurl, {
-					action: 'yscsv_set_featured', nonce: nonce, post_id: postId, att_id: att.id
-				}, function(resp){
+				$.post(ajaxurl, { action:'yscsv_set_featured', nonce:nonce, post_id:postId, att_id:att.id }, function(resp){
 					btn.prop('disabled', false);
+					if (resp && resp.success) { paintRow(postId, resp.data.thumb || resp.data.url); }
+					else { alert('Failed: ' + (resp && resp.data ? resp.data : 'unknown error')); btn.text('Set featured image'); }
+				});
+			});
+			frame.open();
+		});
+
+		// ---- Selection helpers ----
+		function selected(){ return $('.yscsv-check:checked').map(function(){ return $(this).val(); }).get(); }
+		function refresh(){ var n = selected().length; $('.yscsv-count').text(n); $('.yscsv-bulk-set').prop('disabled', n === 0); }
+
+		$('.yscsv-check-all').on('change', function(){
+			$(this).closest('table').find('.yscsv-check').prop('checked', this.checked);
+			refresh();
+		});
+		$(document).on('change', '.yscsv-check', refresh);
+
+		// ---- Bulk: one image -> many posts ----
+		$('.yscsv-bulk-set').on('click', function(e){
+			e.preventDefault();
+			var ids = selected();
+			if (!ids.length) { return; }
+			var btn = $(this), orig = btn.html();
+			var frame = wp.media({ title:'Select a featured image for '+ids.length+' item(s)', button:{text:'Use this image'}, library:{type:'image'}, multiple:false });
+			frame.on('select', function(){
+				var att = frame.state().get('selection').first().toJSON();
+				btn.prop('disabled', true).html('Saving '+ids.length+' item(s)...');
+				$.post(ajaxurl, { action:'yscsv_set_featured_bulk', nonce:nonce, att_id:att.id, post_ids:ids }, function(resp){
+					btn.html(orig);
 					if (resp && resp.success) {
-						var cell = btn.closest('td');
-						cell.find('img.yscsv-thumb').remove();
 						var src = resp.data.thumb || resp.data.url;
-						btn.before('<img class="yscsv-thumb" src="'+src+'" style="max-width:60px;height:auto;display:block;margin-bottom:4px;">');
-						btn.text('Change featured image');
+						$.each(resp.data.ids, function(i, id){ paintRow(id, src); });
+						$('.yscsv-check, .yscsv-check-all').prop('checked', false);
 					} else {
 						alert('Failed: ' + (resp && resp.data ? resp.data : 'unknown error'));
-						btn.text('Set featured image');
 					}
+					refresh();
 				});
 			});
 			frame.open();

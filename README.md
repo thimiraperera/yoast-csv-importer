@@ -12,7 +12,7 @@ Works on any WordPress site. Matches your content by URL — no manual copying f
 - **Never blanks existing values** — empty CSV cells are skipped.
 - **Sample CSV download** — grab the exact column layout to fill in (or to generate against).
 - **SEO status dashboard** — lists published content split into *Completed* vs *Not Completed* (based on focus keyphrase, SEO title, meta description). Post types with Yoast search appearance switched off are hidden.
-- **Featured-image picker** — opens the WordPress media library and applies a chosen image to the post/page featured image, the social (Facebook/LinkedIn) image, and the X image in one click.
+- **Featured-image picker** — opens the WordPress media library and applies a chosen image to the post/page featured image, the social (Facebook/LinkedIn) image, and the X image in one click. Set one item at a time, or tick several and **set them all in bulk** with a single chosen image.
 
 ## Requirements
 

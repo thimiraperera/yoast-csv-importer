@@ -23,6 +23,9 @@ sidebar (its own page, not under Tools) with three sub-pages:
     already-uploaded image, and it is applied in ONE click to the
     post/page featured image, the social (Facebook/LinkedIn) image,
     and the X (Twitter) image.
+    To set MANY at once: tick the checkboxes for the items you want,
+    click "Set featured image for selected", and choose one image -
+    it is applied to every ticked item.
 
 FILES IN THIS FOLDER
   yoast-csv-importer.php   <- the plugin
