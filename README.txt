@@ -12,14 +12,17 @@ description, breadcrumb title, schema page/article type, and the
 WordPress excerpt) to each page or post, matched automatically by URL.
 Works on any WordPress site - no company branding.
 
-It also adds two more tools:
-  * Tools > Yoast SEO Status - lists published pages/posts/etc split
-    into "SEO Completed" and "Not Completed". Post types whose Yoast
-    search appearance is switched OFF (noindex) are hidden.
-  * A "Set featured image" button on each row - opens the WordPress
-    media library, you pick an already-uploaded image, and it is applied
-    in ONE click to the post/page featured image, the social
-    (Facebook/LinkedIn) image, and the X (Twitter) image.
+After activating, a "Yoast SEO Tools" menu appears in the WP admin
+sidebar (its own page, not under Tools) with three sub-pages:
+  * CSV Importer - the bulk import described above.
+  * SEO Status - lists published pages/posts/etc split into
+    "SEO Completed" and "Not Completed". Post types whose Yoast search
+    appearance is switched OFF (noindex) are hidden.
+  * Featured Images - lists every page/post with a "Set featured image"
+    button. It opens the WordPress media library, you pick an
+    already-uploaded image, and it is applied in ONE click to the
+    post/page featured image, the social (Facebook/LinkedIn) image,
+    and the X (Twitter) image.
 
 FILES IN THIS FOLDER
   yoast-csv-importer.php   <- the plugin

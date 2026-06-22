@@ -23,7 +23,7 @@ Works on any WordPress site. Matches your content by URL — no manual copying f
 
 1. Download this repository as a ZIP (or zip the `yoast-csv-importer` folder).
 2. In WP Admin: **Plugins → Add New → Upload Plugin**, choose the ZIP, **Install**, then **Activate**.
-3. Find the tools under **Tools → Yoast SEO CSV Importer** and **Tools → Yoast SEO Status**.
+3. After activating, a **Yoast SEO Tools** menu appears in the admin sidebar with three pages: **CSV Importer**, **SEO Status**, and **Featured Images**.
 
 ## Usage
 

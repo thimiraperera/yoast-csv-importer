@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Yoast SEO CSV Importer
- * Description: Bulk-set Yoast SEO meta (title, meta description, focus keyphrase, canonical, cornerstone, social, breadcrumb, schema type, excerpt) for pages and posts from a CSV, matched by URL. Includes a sample CSV download, an SEO status dashboard (completed vs not completed), and a featured-image picker that sets the post thumbnail plus Yoast social and X images at once.
- * Version: 2.1.0
+ * Description: Bulk-set Yoast SEO meta (title, meta description, focus keyphrase, canonical, cornerstone, social, breadcrumb, schema type, excerpt) for pages and posts from a CSV, matched by URL. Adds its own admin menu with a CSV Importer, an SEO status dashboard (completed vs not completed), and a Featured Images page that sets the post thumbnail plus Yoast social and X images at once.
+ * Version: 2.2.0
  * Author: Thimira Perera
  * Requires at least: 5.5
  * Requires Plugins: wordpress-seo
@@ -425,8 +425,7 @@ function yscsv_status_page() {
 		<?php endif; ?>
 		<p>Lists published content split into <strong>SEO completed</strong> and <strong>not completed</strong>
 		   (based on Focus Keyphrase, SEO Title and Meta Description). Post types with Yoast search appearance
-		   switched <em>off</em> are not shown. Use the buttons to set a featured image - it is applied to the
-		   page/post thumbnail, the social (Facebook/LinkedIn) image and the X image at once.</p>
+		   switched <em>off</em> are not shown. To add featured images, use the <strong>Featured Images</strong> page.</p>
 
 		<?php
 		$types = yscsv_audited_post_types();
@@ -462,6 +461,91 @@ function yscsv_status_page() {
 
 		<h2 style="margin-top:24px;">&#9888; Not Completed &mdash; <?php echo count( $not_completed ); ?></h2>
 		<?php yscsv_status_table( $not_completed, true ); ?>
+	</div>
+	<?php
+}
+
+/** Render one status table. $show_missing adds a "Missing" column. */
+function yscsv_status_table( $rows, $show_missing ) {
+	if ( ! $rows ) { echo '<p><em>None.</em></p>'; return; }
+	?>
+	<table class="widefat striped">
+		<thead>
+			<tr>
+				<th>Type</th>
+				<th>Title</th>
+				<?php if ( $show_missing ) : ?><th>Missing</th><?php endif; ?>
+			</tr>
+		</thead>
+		<tbody>
+		<?php foreach ( $rows as $r ) :
+			$p = $r['post'];
+			$edit = get_edit_post_link( $p->ID );
+			$view = get_permalink( $p->ID );
+			?>
+			<tr>
+				<td><?php echo esc_html( $r['label'] ); ?></td>
+				<td>
+					<strong><a href="<?php echo esc_url( $edit ); ?>"><?php echo esc_html( get_the_title( $p ) ?: '(no title)' ); ?></a></strong>
+					<div><a href="<?php echo esc_url( $view ); ?>" target="_blank" rel="noopener" style="font-size:12px;"><?php echo esc_html( $view ); ?></a></div>
+				</td>
+				<?php if ( $show_missing ) : ?>
+					<td><?php echo esc_html( implode( ', ', $r['missing'] ) ); ?></td>
+				<?php endif; ?>
+			</tr>
+		<?php endforeach; ?>
+		</tbody>
+	</table>
+	<?php
+}
+
+/* -------------------------------------------------------------------------
+ * FEATURED IMAGES PAGE
+ * ---------------------------------------------------------------------- */
+
+/** Dedicated page: pick a featured image for any page/post via the media library. */
+function yscsv_featured_page() {
+	if ( ! current_user_can( 'manage_options' ) ) { return; }
+	?>
+	<div class="wrap">
+		<h1>Featured Images</h1>
+		<p>Pick an <strong>already-uploaded</strong> image from the WordPress media library for any page or post.
+		   One click sets it in all three places at once: the <strong>page/post featured image</strong>,
+		   the <strong>social (Facebook/LinkedIn) image</strong>, and the <strong>X (Twitter) image</strong>.</p>
+
+		<?php
+		$types = yscsv_audited_post_types();
+		if ( ! $types ) { echo '<p>No applicable post types found.</p></div>'; return; }
+
+		foreach ( $types as $pt ) :
+			$q = new WP_Query( array(
+				'post_type'      => $pt->name,
+				'post_status'    => 'publish',
+				'posts_per_page' => 500,
+				'orderby'        => 'title',
+				'order'          => 'ASC',
+				'no_found_rows'  => true,
+			) );
+			if ( ! $q->posts ) { wp_reset_postdata(); continue; }
+			?>
+			<h2 style="margin-top:24px;"><?php echo esc_html( $pt->labels->name ); ?> &mdash; <?php echo count( $q->posts ); ?></h2>
+			<table class="widefat striped">
+				<thead><tr><th>Title</th><th style="width:220px;">Featured image</th></tr></thead>
+				<tbody>
+				<?php foreach ( $q->posts as $p ) : ?>
+					<tr>
+						<td>
+							<strong><a href="<?php echo esc_url( get_edit_post_link( $p->ID ) ); ?>"><?php echo esc_html( get_the_title( $p ) ?: '(no title)' ); ?></a></strong>
+						</td>
+						<td><?php echo yscsv_featured_cell( $p->ID ); // phpcs:ignore WordPress.Security.EscapeOutput ?></td>
+					</tr>
+				<?php endforeach; ?>
+				</tbody>
+			</table>
+			<?php
+			wp_reset_postdata();
+		endforeach;
+		?>
 	</div>
 
 	<script>
@@ -502,50 +586,22 @@ function yscsv_status_page() {
 	<?php
 }
 
-/** Render one status table. $show_missing adds a "Missing" column. */
-function yscsv_status_table( $rows, $show_missing ) {
-	if ( ! $rows ) { echo '<p><em>None.</em></p>'; return; }
-	?>
-	<table class="widefat striped">
-		<thead>
-			<tr>
-				<th>Type</th>
-				<th>Title</th>
-				<?php if ( $show_missing ) : ?><th>Missing</th><?php endif; ?>
-				<th style="width:180px;">Featured image</th>
-			</tr>
-		</thead>
-		<tbody>
-		<?php foreach ( $rows as $r ) :
-			$p = $r['post'];
-			$edit = get_edit_post_link( $p->ID );
-			$view = get_permalink( $p->ID );
-			?>
-			<tr>
-				<td><?php echo esc_html( $r['label'] ); ?></td>
-				<td>
-					<strong><a href="<?php echo esc_url( $edit ); ?>"><?php echo esc_html( get_the_title( $p ) ?: '(no title)' ); ?></a></strong>
-					<div><a href="<?php echo esc_url( $view ); ?>" target="_blank" rel="noopener" style="font-size:12px;"><?php echo esc_html( $view ); ?></a></div>
-				</td>
-				<?php if ( $show_missing ) : ?>
-					<td><?php echo esc_html( implode( ', ', $r['missing'] ) ); ?></td>
-				<?php endif; ?>
-				<td><?php echo yscsv_featured_cell( $p->ID ); // phpcs:ignore WordPress.Security.EscapeOutput ?></td>
-			</tr>
-		<?php endforeach; ?>
-		</tbody>
-	</table>
-	<?php
-}
-
 add_action( 'admin_menu', function () {
-	add_management_page( 'Yoast SEO CSV Importer', 'Yoast SEO CSV Importer', 'manage_options', 'yoast-csv-importer', 'yscsv_admin_page' );
-	$GLOBALS['yscsv_status_hook'] = add_management_page( 'Yoast SEO Status', 'Yoast SEO Status', 'manage_options', 'yoast-csv-status', 'yscsv_status_page' );
+	$cap  = 'manage_options';
+	$slug = 'yoast-csv-importer';
+
+	// Top-level menu for the plugin (its own separate page in the admin sidebar).
+	add_menu_page( 'Yoast SEO Tools', 'Yoast SEO Tools', $cap, $slug, 'yscsv_admin_page', 'dashicons-search', 81 );
+
+	// Sub-pages.
+	add_submenu_page( $slug, 'CSV Importer', 'CSV Importer', $cap, $slug, 'yscsv_admin_page' );
+	add_submenu_page( $slug, 'SEO Status', 'SEO Status', $cap, 'yoast-csv-status', 'yscsv_status_page' );
+	$GLOBALS['yscsv_featured_hook'] = add_submenu_page( $slug, 'Featured Images', 'Featured Images', $cap, 'yoast-csv-featured', 'yscsv_featured_page' );
 } );
 
-/** Load the WordPress media library scripts only on the status page. */
+/** Load the WordPress media library scripts only on the Featured Images page. */
 add_action( 'admin_enqueue_scripts', function ( $hook ) {
-	if ( isset( $GLOBALS['yscsv_status_hook'] ) && $hook === $GLOBALS['yscsv_status_hook'] ) {
+	if ( isset( $GLOBALS['yscsv_featured_hook'] ) && $hook === $GLOBALS['yscsv_featured_hook'] ) {
 		wp_enqueue_media();
 	}
 } );
