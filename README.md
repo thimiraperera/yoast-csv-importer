@@ -8,7 +8,8 @@ Works on any WordPress site. Matches your content by URL — no manual copying f
 
 - **Bulk import from CSV** — set SEO title, meta description, focus keyphrase, canonical, cornerstone, breadcrumb title, schema page/article type, social (Open Graph) title & description, X (Twitter) title & description, and the WordPress excerpt.
 - **Matched by URL** — works for pages, posts, and any public custom post type.
-- **Dry-run preview** — see exactly what will change before applying. Rows that can't be matched are flagged.
+- **Dry-run preview with per-row exclude** — see exactly what will change before applying, then untick any pages you want to skip. Only the ticked rows are applied. Rows that can't be matched are flagged and can't be selected.
+- **No re-saving each page** — after applying, Yoast's cached SEO data is refreshed automatically, so the new tags show on the front end without opening and re-saving every page.
 - **Never blanks existing values** — empty CSV cells are skipped.
 - **Sample CSV download** — grab the exact column layout to fill in (or to generate against).
 - **SEO status dashboard** — lists published content split into *Completed* vs *Not Completed* (based on focus keyphrase, SEO title, meta description). Post types with Yoast search appearance switched off are hidden.
@@ -31,7 +32,8 @@ Works on any WordPress site. Matches your content by URL — no manual copying f
 2. Click **Download sample CSV** to get the column layout.
 3. Fill it with your pages, keeping the header row and column names exactly.
 4. Upload the CSV, click **Preview (dry run)**, and review the table.
-5. When it looks right, click **Apply changes**.
+5. Untick any pages you want to exclude (the header checkbox toggles all).
+6. Click **Apply changes to selected pages**. Yoast's cache is refreshed automatically — no need to open and re-save each page.
 
 ### CSV columns (in order)
 

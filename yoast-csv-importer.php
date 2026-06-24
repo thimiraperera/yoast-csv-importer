@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Yoast SEO CSV Importer
- * Description: Bulk-set Yoast SEO meta (title, meta description, focus keyphrase, canonical, cornerstone, social, breadcrumb, schema type, excerpt) for pages and posts from a CSV, matched by URL. Adds its own admin menu with a CSV Importer, an SEO status dashboard (completed vs not completed), and a Featured Images page that sets the post thumbnail plus Yoast social and X images at once - one at a time or in bulk to many selected items.
- * Version: 2.3.0
+ * Description: Bulk-set Yoast SEO meta (title, meta description, focus keyphrase, canonical, cornerstone, social, breadcrumb, schema type, excerpt) for pages and posts from a CSV, matched by URL. The preview lets you untick individual pages to exclude them before applying, and Yoast's cached SEO data is refreshed automatically so you never have to open and re-save each page. Adds its own admin menu with a CSV Importer, an SEO status dashboard (completed vs not completed), and a Featured Images page that sets the post thumbnail plus Yoast social and X images at once - one at a time or in bulk to many selected items.
+ * Version: 2.4.0
  * Author: Thimira Perera
  * Requires at least: 5.5
  * Requires Plugins: wordpress-seo
@@ -134,6 +134,39 @@ function yscsv_read_bundled_csv() {
 	return $rows;
 }
 
+/**
+ * Refresh Yoast's cached "indexable" for a post.
+ *
+ * Yoast keeps a cached copy of each page's SEO data in its own indexables table, and the
+ * front end reads from there. Writing post meta directly (as this importer does) leaves that
+ * cache stale - which is why, normally, you'd have to open each page and click Update to see
+ * the change. This rebuilds the cache for the post so the new values show up right away.
+ */
+function yscsv_refresh_indexable( $post_id ) {
+	$post_id = (int) $post_id;
+	if ( ! $post_id ) { return; }
+
+	// Preferred: have Yoast rebuild the indexable from the fresh post meta.
+	if ( function_exists( 'YoastSEO' ) ) {
+		try {
+			$builder = YoastSEO()->classes->get( \Yoast\WP\SEO\Builders\Indexable_Builder::class );
+			if ( is_object( $builder ) && method_exists( $builder, 'build_for_id_and_type' ) ) {
+				$builder->build_for_id_and_type( $post_id, 'post' );
+				return;
+			}
+		} catch ( \Throwable $e ) {
+			// Fall through to the delete-based refresh below.
+		}
+	}
+
+	// Fallback: delete the cached row so Yoast rebuilds it on the next request.
+	global $wpdb;
+	$table = $wpdb->prefix . 'yoast_indexable';
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) === $table ) {
+		$wpdb->delete( $table, array( 'object_id' => $post_id, 'object_type' => 'post' ), array( '%d', '%s' ) );
+	}
+}
+
 /** Apply one row to a post. $dry = true means preview only. Returns status array. */
 function yscsv_apply_row( $row, $dry ) {
 	$url = isset( $row['URL'] ) ? trim( $row['URL'] ) : '';
@@ -171,6 +204,12 @@ function yscsv_apply_row( $row, $dry ) {
 		if ( $value === '' ) { continue; }
 		$changes[] = $col;
 		if ( ! $dry ) { update_post_meta( $post_id, $meta_key, $value ); }
+	}
+
+	// Real run: refresh Yoast's cached SEO copy so the new values show on the front end
+	// immediately, without having to open and re-save each page by hand.
+	if ( ! $dry && $changes ) {
+		yscsv_refresh_indexable( $post_id );
 	}
 
 	$status = ( $dry ? 'WILL UPDATE: ' : 'UPDATED: ' ) . implode( ', ', $changes );
@@ -234,38 +273,50 @@ function yscsv_download_sample() {
 }
 add_action( 'admin_post_yscsv_sample', 'yscsv_download_sample' );
 
-/** Admin page. */
+/** Admin page: CSV importer with preview, per-row exclude, then apply. */
 function yscsv_admin_page() {
 	if ( ! current_user_can( 'manage_options' ) ) { return; }
 
-	$results = array();
-	$ran     = false;
-	$dry     = true;
+	$mode          = '';      // '' | 'preview' | 'applied'
+	$results       = array(); // rows shown in the table below
+	$skipped_count = 0;       // CSV rows that were not applied (excluded or unmatched)
 
-	if ( isset( $_POST['yscsv_run'] ) && check_admin_referer( 'yscsv_run' ) ) {
-		$dry  = ( $_POST['yscsv_run'] === 'preview' );
+	// ---------- 2) APPLY the rows the user kept ticked ----------
+	if ( isset( $_POST['yscsv_apply_selected'] ) && check_admin_referer( 'yscsv_apply' ) ) {
+		$cached = get_transient( 'yscsv_rows' );
+		if ( ! is_array( $cached ) || ! $cached ) {
+			echo '<div class="notice notice-error"><p>Your preview has expired. Please upload your CSV and run Preview again.</p></div>';
+		} else {
+			$selected = ( isset( $_POST['apply_rows'] ) && is_array( $_POST['apply_rows'] ) )
+				? array_flip( array_map( 'intval', $_POST['apply_rows'] ) )
+				: array();
+			foreach ( $cached as $i => $row ) {
+				if ( ! isset( $selected[ $i ] ) ) { continue; } // unticked = excluded.
+				$results[] = yscsv_apply_row( $row, false );
+			}
+			$skipped_count = count( $cached ) - count( $results );
+			$mode          = 'applied';
+		}
+	}
+
+	// ---------- 1) PREVIEW (dry run) ----------
+	if ( $mode === '' && isset( $_POST['yscsv_preview'] ) && check_admin_referer( 'yscsv_run' ) ) {
 		$rows = null;
 
-		// 1) Prefer a freshly uploaded file; cache it so Preview -> Apply works without re-uploading.
+		// Prefer a freshly uploaded file.
 		if ( isset( $_FILES['yscsv_csv'] ) && ! empty( $_FILES['yscsv_csv']['tmp_name'] ) && is_uploaded_file( $_FILES['yscsv_csv']['tmp_name'] ) ) {
 			$h = fopen( $_FILES['yscsv_csv']['tmp_name'], 'r' );
 			if ( $h !== false ) {
 				$rows = yscsv_parse_handle( $h );
 				fclose( $h );
-				set_transient( 'yscsv_rows', $rows, HOUR_IN_SECONDS );
 			} else {
 				echo '<div class="notice notice-error"><p>Could not read the uploaded CSV.</p></div>';
 			}
 		}
 
-		// 2) Else reuse the last uploaded CSV (cached), else fall back to a bundled file.
+		// Else fall back to a .csv bundled in the plugin folder.
 		if ( $rows === null ) {
-			$cached = get_transient( 'yscsv_rows' );
-			if ( is_array( $cached ) && $cached ) {
-				$rows = $cached;
-			} else {
-				$rows = yscsv_read_bundled_csv();
-			}
+			$rows = yscsv_read_bundled_csv();
 		}
 
 		if ( is_wp_error( $rows ) ) {
@@ -273,8 +324,11 @@ function yscsv_admin_page() {
 		} elseif ( ! $rows ) {
 			echo '<div class="notice notice-error"><p>The CSV had no data rows.</p></div>';
 		} else {
-			foreach ( $rows as $row ) { $results[] = yscsv_apply_row( $row, $dry ); }
-			$ran = true;
+			// Re-index so row numbers stay stable between Preview and Apply, then cache.
+			$rows = array_values( $rows );
+			set_transient( 'yscsv_rows', $rows, HOUR_IN_SECONDS );
+			foreach ( $rows as $row ) { $results[] = yscsv_apply_row( $row, true ); }
+			$mode = 'preview';
 		}
 	}
 
@@ -283,8 +337,8 @@ function yscsv_admin_page() {
 	<div class="wrap">
 		<h1>Yoast SEO CSV Importer</h1>
 		<p>Reads a CSV and writes Yoast SEO meta for each matched page, matched automatically by URL.
-		   <strong>Always run Preview first.</strong> Empty CSV cells are skipped (existing values are never blanked).
-		   Requires the Yoast SEO plugin to be active.</p>
+		   <strong>Run Preview first</strong>, then untick any page you want to skip before applying.
+		   Empty CSV cells are skipped (existing values are never blanked). Requires the Yoast SEO plugin to be active.</p>
 
 		<p>
 			<a class="button" href="<?php echo esc_url( $sample_url ); ?>">&#8681; Download sample CSV</a>
@@ -298,20 +352,65 @@ function yscsv_admin_page() {
 					<th scope="row"><label for="yscsv_csv">CSV file</label></th>
 					<td>
 						<input type="file" id="yscsv_csv" name="yscsv_csv" accept=".csv,text/csv">
-						<p class="description">Optional. If left empty, the last uploaded CSV (or a <code>.csv</code> in the plugin folder) is used.</p>
+						<p class="description">Optional. If left empty, a <code>.csv</code> in the plugin folder is used.</p>
 					</td>
 				</tr>
 			</table>
 			<p>
-				<button type="submit" name="yscsv_run" value="preview" class="button button-secondary">1. Preview (dry run)</button>
-				&nbsp;
-				<button type="submit" name="yscsv_run" value="apply" class="button button-primary"
-					onclick="return confirm('Apply changes to all matched pages now?');">2. Apply changes</button>
+				<button type="submit" name="yscsv_preview" value="1" class="button button-primary">Preview (dry run)</button>
 			</p>
 		</form>
 
-		<?php if ( $ran ) : ?>
-			<h2><?php echo $dry ? 'Preview' : 'Applied'; ?> &mdash; <?php echo count( $results ); ?> rows</h2>
+		<?php if ( $mode === 'preview' ) : ?>
+			<form method="post">
+				<?php wp_nonce_field( 'yscsv_apply' ); ?>
+				<h2>Preview &mdash; <?php echo count( $results ); ?> rows</h2>
+				<p>Untick any page you want to <strong>exclude</strong>, then apply.
+				   Rows marked <em>NOT FOUND</em> can&rsquo;t be applied.</p>
+				<table class="widefat striped">
+					<thead>
+						<tr>
+							<td class="check-column"><input type="checkbox" id="yscsv-toggle-all" checked title="Select all"></td>
+							<th>URL</th><th>Post ID</th><th>Result</th>
+						</tr>
+					</thead>
+					<tbody>
+					<?php foreach ( $results as $i => $r ) :
+						$can_apply = ( (int) $r['id'] > 0 ); ?>
+						<tr<?php echo $can_apply ? '' : ' style="background:#fcebea;"'; ?>>
+							<th scope="row" class="check-column">
+								<?php if ( $can_apply ) : ?>
+									<input type="checkbox" class="yscsv-row" name="apply_rows[]" value="<?php echo (int) $i; ?>" checked>
+								<?php else : ?>
+									&mdash;
+								<?php endif; ?>
+							</th>
+							<td><?php echo esc_html( $r['url'] ); ?></td>
+							<td><?php echo (int) $r['id']; ?></td>
+							<td><?php echo esc_html( $r['status'] ); ?></td>
+						</tr>
+					<?php endforeach; ?>
+					</tbody>
+				</table>
+				<p>
+					<button type="submit" name="yscsv_apply_selected" value="1" class="button button-primary"
+						onclick="return confirm('Apply changes to the ticked pages now?');">Apply changes to selected pages</button>
+				</p>
+			</form>
+			<script>
+			(function(){
+				var all = document.getElementById('yscsv-toggle-all');
+				if ( ! all ) { return; }
+				all.addEventListener('change', function(){
+					var boxes = document.querySelectorAll('.yscsv-row');
+					for ( var i = 0; i < boxes.length; i++ ) { boxes[i].checked = all.checked; }
+				});
+			})();
+			</script>
+
+		<?php elseif ( $mode === 'applied' ) : ?>
+			<h2>Applied &mdash; <?php echo count( $results ); ?> page(s) updated<?php
+				if ( $skipped_count > 0 ) { echo ', ' . (int) $skipped_count . ' not applied'; } ?></h2>
 			<table class="widefat striped">
 				<thead><tr><th>URL</th><th>Post ID</th><th>Result</th></tr></thead>
 				<tbody>
@@ -324,9 +423,9 @@ function yscsv_admin_page() {
 				<?php endforeach; ?>
 				</tbody>
 			</table>
-			<?php if ( ! $dry ) : ?>
-				<p><strong>Done.</strong> Clear any cache so the new tags show. You can deactivate this plugin when finished.</p>
-			<?php endif; ?>
+			<p><strong>Done.</strong> Yoast&rsquo;s cached SEO data was refreshed automatically &mdash; you do
+			   <em>not</em> need to open and re-save each page. If you use a caching/CDN plugin, clear its cache
+			   so visitors see the new tags.</p>
 		<?php endif; ?>
 	</div>
 	<?php
