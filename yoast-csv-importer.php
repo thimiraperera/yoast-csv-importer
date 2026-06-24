@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Yoast SEO CSV Importer
  * Description: Bulk-set Yoast SEO meta (title, meta description, focus keyphrase, canonical, cornerstone, social, breadcrumb, schema type, excerpt) for pages and posts from a CSV, matched by URL. The preview lets you untick individual pages to exclude them before applying, and Yoast's cached SEO data is refreshed automatically so you never have to open and re-save each page. Adds its own admin menu with a CSV Importer, an SEO status dashboard (completed vs not completed), and a Featured Images page that sets the post thumbnail plus Yoast social and X images at once - one at a time or in bulk to many selected items.
- * Version: 2.4.0
+ * Version: 2.4.1
  * Author: Thimira Perera
  * Requires at least: 5.5
  * Requires Plugins: wordpress-seo
@@ -97,20 +97,70 @@ function yscsv_resolve_post_id( $url ) {
 	return 0;
 }
 
-/** Parse an open CSV file handle into an array of assoc rows. */
+/** Guess the column delimiter from the header line (comma, semicolon, tab or pipe). */
+function yscsv_detect_delimiter( $line ) {
+	$counts = array(
+		','  => substr_count( $line, ',' ),
+		';'  => substr_count( $line, ';' ),
+		"\t" => substr_count( $line, "\t" ),
+		'|'  => substr_count( $line, '|' ),
+	);
+	arsort( $counts );
+	$best = key( $counts );
+	return ( $counts[ $best ] > 0 ) ? $best : ',';
+}
+
+/** Clean a header cell: strip a UTF-8 BOM and zero-width chars, then trim. */
+function yscsv_clean_header( $s ) {
+	$s = (string) $s;
+	$s = preg_replace( '/^\xEF\xBB\xBF/', '', $s );          // UTF-8 BOM at the very start.
+	$s = preg_replace( '/[\x{200B}\x{FEFF}]/u', '', $s );    // stray zero-width / BOM chars.
+	return trim( $s );
+}
+
+/** Map a header to its canonical name (e.g. "url" or " URL " -> "URL"), case/space-insensitive. */
+function yscsv_canonical_header( $col ) {
+	$norm = strtolower( preg_replace( '/\s+/', ' ', trim( (string) $col ) ) );
+	foreach ( yscsv_columns() as $known ) {
+		if ( strtolower( $known ) === $norm ) { return $known; }
+	}
+	return $col; // Unknown column: leave as-is (it's ignored later anyway).
+}
+
+/**
+ * Parse an open CSV file handle into an array of assoc rows.
+ *
+ * Robust to the two things that commonly break imports: a UTF-8 BOM on the
+ * header (from "CSV UTF-8" / AI-generated files) and non-comma delimiters
+ * (semicolon/tab, common in localised Excel exports). Header names are also
+ * matched case- and whitespace-insensitively so "url" still maps to "URL".
+ */
 function yscsv_parse_handle( $h ) {
-	$rows   = array();
-	$header = fgetcsv( $h );
-	if ( $header ) {
-		$header = array_map( 'trim', $header );
-		while ( ( $data = fgetcsv( $h ) ) !== false ) {
-			if ( count( array_filter( $data ) ) === 0 ) { continue; }
-			$row = array();
-			foreach ( $header as $i => $col ) {
-				$row[ $col ] = isset( $data[ $i ] ) ? $data[ $i ] : '';
-			}
-			$rows[] = $row;
+	$rows = array();
+
+	// Peek at the first line to detect the delimiter, then rewind to parse properly.
+	$first = fgets( $h );
+	if ( $first === false ) { return $rows; }
+	rewind( $h );
+	$delim = yscsv_detect_delimiter( ltrim( $first, "\xEF\xBB\xBF" ) );
+
+	$header = fgetcsv( $h, 0, $delim );
+	if ( ! $header ) { return $rows; }
+	$header = array_map( 'yscsv_clean_header', $header );
+	$header = array_map( 'yscsv_canonical_header', $header );
+
+	while ( ( $data = fgetcsv( $h, 0, $delim ) ) !== false ) {
+		// Skip fully blank lines (null-safe: fgetcsv returns array(null) for an empty line).
+		$has_value = false;
+		foreach ( $data as $cell ) {
+			if ( $cell !== null && $cell !== '' ) { $has_value = true; break; }
 		}
+		if ( ! $has_value ) { continue; }
+		$row = array();
+		foreach ( $header as $i => $col ) {
+			$row[ $col ] = isset( $data[ $i ] ) ? $data[ $i ] : '';
+		}
+		$rows[] = $row;
 	}
 	return $rows;
 }
