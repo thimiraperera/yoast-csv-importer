@@ -9,7 +9,7 @@ Works on any WordPress site. Matches your content by URL — no manual copying f
 - **Bulk import from CSV** — set SEO title, meta description, focus keyphrase, canonical, cornerstone, breadcrumb title, schema page/article type, social (Open Graph) title & description, X (Twitter) title & description, and the WordPress excerpt.
 - **Matched by URL** — works for pages, posts, and any public custom post type.
 - **Dry-run preview with per-row exclude** — see exactly what will change before applying, then untick any pages you want to skip. Only the ticked rows are applied. Rows that can't be matched are flagged and can't be selected.
-- **No re-saving each page** — after applying, Yoast's cached SEO data is refreshed automatically, so the new tags show on the front end without opening and re-saving every page.
+- **No re-saving each page** — after applying, Yoast's cached SEO data is refreshed automatically, so the new tags show on the front end without opening and re-saving every page. (Yoast's SEO and Readability score dots are a separate thing; see [Score dots stay grey](#score-dots-stay-grey).)
 - **Never blanks existing values** — empty CSV cells are skipped.
 - **Sample CSV download** — grab the exact column layout to fill in (or to generate against).
 - **SEO status dashboard** — lists published content split into *Completed* vs *Not Completed* (based on focus keyphrase, SEO title, meta description). Post types with Yoast search appearance switched off are hidden.
@@ -46,6 +46,12 @@ Excerpt
 
 - `Cornerstone`: `Yes` or `No`.
 - Empty cells are skipped — fill a cell only when you want to set it.
+
+## Score dots stay grey
+
+Yoast calculates the **SEO** and **Readability** scores (the coloured dots in the posts list) with its own analysis, which only runs in the post editor. An import can't produce them, so an imported page shows a grey dot (or its old score) until you open it in the editor and click **Update** once.
+
+Versions before 2.5.0 had a bug: every import added a second copy of the page's record to Yoast's indexables table. The posts list read that copy, while the editor kept updating the original — so the dots stayed grey even after re-saving. 2.5.0 no longer creates copies and removes the existing ones automatically the first time an administrator opens wp-admin after updating. Pages you had already re-saved show their scores straight away.
 
 ## License
 

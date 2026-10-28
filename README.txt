@@ -60,6 +60,13 @@ NOTES
 - No upload? It falls back to any .csv file placed in this plugin folder.
 - Requires the Yoast SEO plugin to be active.
 - Safe to run on a staging copy first if you have one.
+- SEO / Readability score dots: Yoast calculates these only in the post
+  editor, never from imported data. An imported page shows a grey dot
+  (or its old score) until you open it in the editor and click Update once.
+- Versions before 2.5.0 added a duplicate Yoast record on every import,
+  which kept the dots grey even after re-saving. 2.5.0 stops that and
+  removes the old duplicates automatically the first time an administrator
+  opens wp-admin after updating.
 
 UNINSTALL
 Plugins > deactivate "Yoast SEO CSV Importer" > Delete. Your SEO data

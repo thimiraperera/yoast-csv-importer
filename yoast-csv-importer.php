@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name: Yoast SEO CSV Importer
- * Description: Bulk-set Yoast SEO meta (title, meta description, focus keyphrase, canonical, cornerstone, social, breadcrumb, schema type, excerpt) for pages and posts from a CSV, matched by URL. The preview lets you untick individual pages to exclude them before applying, and Yoast's cached SEO data is refreshed automatically so you never have to open and re-save each page. Adds its own admin menu with a CSV Importer, an SEO status dashboard (completed vs not completed), and a Featured Images page that sets the post thumbnail plus Yoast social and X images at once - one at a time or in bulk to many selected items.
- * Version: 2.4.1
+ * Description: Bulk-set Yoast SEO meta (title, meta description, focus keyphrase, canonical, cornerstone, social, breadcrumb, schema type, excerpt) for pages and posts from a CSV, matched by URL. The preview lets you untick individual pages to exclude them before applying, and Yoast's cached SEO data is refreshed automatically so the new tags go live without re-saving each page. Adds its own admin menu with a CSV Importer, an SEO status dashboard (completed vs not completed), and a Featured Images page that sets the post thumbnail plus Yoast social and X images at once - one at a time or in bulk to many selected items.
+ * Version: 2.5.0
  * Author: Thimira Perera
  * Requires at least: 5.5
  * Requires Plugins: wordpress-seo
@@ -191,17 +191,24 @@ function yscsv_read_bundled_csv() {
  * front end reads from there. Writing post meta directly (as this importer does) leaves that
  * cache stale - which is why, normally, you'd have to open each page and click Update to see
  * the change. This rebuilds the cache for the post so the new values show up right away.
+ *
+ * The existing row must be handed to Yoast's builder. Without it, Yoast inserts a second row
+ * for the same page, and the posts list then shows that copy - whose SEO/Readability scores
+ * never update, even after the page is re-saved. Versions before 2.5.0 did exactly that.
  */
 function yscsv_refresh_indexable( $post_id ) {
 	$post_id = (int) $post_id;
 	if ( ! $post_id ) { return; }
 
-	// Preferred: have Yoast rebuild the indexable from the fresh post meta.
+	// Preferred: have Yoast rebuild its existing indexable from the fresh post meta,
+	// the same way it does when a page is saved in the editor.
 	if ( function_exists( 'YoastSEO' ) ) {
 		try {
+			$repo    = YoastSEO()->classes->get( \Yoast\WP\SEO\Repositories\Indexable_Repository::class );
 			$builder = YoastSEO()->classes->get( \Yoast\WP\SEO\Builders\Indexable_Builder::class );
-			if ( is_object( $builder ) && method_exists( $builder, 'build_for_id_and_type' ) ) {
-				$builder->build_for_id_and_type( $post_id, 'post' );
+			if ( is_object( $repo ) && is_object( $builder ) && method_exists( $builder, 'build_for_id_and_type' ) ) {
+				$existing = $repo->find_by_id_and_type( $post_id, 'post', false );
+				$builder->build_for_id_and_type( $post_id, 'post', $existing ? $existing : false );
 				return;
 			}
 		} catch ( \Throwable $e ) {
@@ -212,10 +219,71 @@ function yscsv_refresh_indexable( $post_id ) {
 	// Fallback: delete the cached row so Yoast rebuilds it on the next request.
 	global $wpdb;
 	$table = $wpdb->prefix . 'yoast_indexable';
-	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) === $table ) {
+	if ( yscsv_table_exists( $table ) ) {
 		$wpdb->delete( $table, array( 'object_id' => $post_id, 'object_type' => 'post' ), array( '%d', '%s' ) );
 	}
 }
+
+/** Does this database table exist? */
+function yscsv_table_exists( $table ) {
+	global $wpdb;
+	return $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) ) === $table;
+}
+
+/**
+ * Remove the duplicate Yoast indexable rows that versions before 2.5.0 created.
+ *
+ * Yoast's editor and front end always read and update the OLDEST row for a post, while the
+ * posts list shows the NEWEST one - so with duplicates the SEO/Readability dots stayed grey
+ * even after a page was re-saved. Keeps the oldest row per post and deletes the extras (and
+ * their hierarchy rows). Returns the number of posts that had duplicates.
+ */
+function yscsv_repair_duplicate_indexables() {
+	global $wpdb;
+	$table     = $wpdb->prefix . 'yoast_indexable';
+	$hierarchy = $wpdb->prefix . 'yoast_indexable_hierarchy';
+	if ( ! yscsv_table_exists( $table ) ) { return 0; }
+	$has_hierarchy = yscsv_table_exists( $hierarchy );
+
+	$dupes = $wpdb->get_results(
+		"SELECT object_id, MIN(id) AS keep_id FROM {$table} WHERE object_type = 'post' GROUP BY object_id HAVING COUNT(*) > 1"
+	);
+	if ( ! $dupes ) { return 0; }
+
+	foreach ( $dupes as $d ) {
+		$extra = $wpdb->get_col( $wpdb->prepare(
+			"SELECT id FROM {$table} WHERE object_type = 'post' AND object_id = %d AND id <> %d",
+			(int) $d->object_id,
+			(int) $d->keep_id
+		) );
+		if ( ! $extra ) { continue; }
+		$in = implode( ',', array_map( 'intval', $extra ) );
+		if ( $has_hierarchy ) { $wpdb->query( "DELETE FROM {$hierarchy} WHERE indexable_id IN ({$in})" ); }
+		$wpdb->query( "DELETE FROM {$table} WHERE id IN ({$in})" );
+	}
+	return count( $dupes );
+}
+
+/**
+ * Run the duplicate clean-up once per site after updating, so pages that were already
+ * re-saved in the editor show their real scores in the posts list again.
+ */
+add_action( 'admin_init', function () {
+	if ( get_option( 'yscsv_indexables_repaired' ) || ! defined( 'WPSEO_VERSION' ) || ! current_user_can( 'manage_options' ) ) { return; }
+	$fixed = yscsv_repair_duplicate_indexables();
+	update_option( 'yscsv_indexables_repaired', 1 );
+	if ( $fixed ) { set_transient( 'yscsv_repaired_count', $fixed, WEEK_IN_SECONDS ); }
+} );
+
+/** Tell the admin once what the clean-up fixed. */
+add_action( 'admin_notices', function () {
+	$fixed = (int) get_transient( 'yscsv_repaired_count' );
+	if ( ! $fixed || ! current_user_can( 'manage_options' ) ) { return; }
+	delete_transient( 'yscsv_repaired_count' );
+	echo '<div class="notice notice-success is-dismissible"><p><strong>Yoast SEO CSV Importer</strong> removed duplicate Yoast SEO records for '
+		. (int) $fixed . ' page(s), left behind by earlier versions of this importer. Pages you already updated in the editor now show their SEO and Readability scores.'
+		. ' A page that still shows a grey dot has not been analysed by Yoast yet: open it in the editor and click Update once.</p></div>';
+} );
 
 /** Apply one row to a post. $dry = true means preview only. Returns status array. */
 function yscsv_apply_row( $row, $dry ) {
@@ -473,9 +541,12 @@ function yscsv_admin_page() {
 				<?php endforeach; ?>
 				</tbody>
 			</table>
-			<p><strong>Done.</strong> Yoast&rsquo;s cached SEO data was refreshed automatically &mdash; you do
-			   <em>not</em> need to open and re-save each page. If you use a caching/CDN plugin, clear its cache
+			<p><strong>Done.</strong> Yoast&rsquo;s cached SEO data was refreshed automatically, so the new tags
+			   are live without opening and re-saving each page. If you use a caching/CDN plugin, clear its cache
 			   so visitors see the new tags.</p>
+			<p>The <strong>SEO</strong> and <strong>Readability</strong> score dots in the posts list are different:
+			   Yoast only calculates them in the editor, never from imported data. Until a page is opened in the
+			   editor and updated once, it shows a grey dot (or its old score).</p>
 		<?php endif; ?>
 	</div>
 	<?php
